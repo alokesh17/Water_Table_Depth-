@@ -1,0 +1,2057 @@
+---
+title: "model performance water table depth recent prediction"
+author: "Alokesh Manna"
+date: '2023-08-13'
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##The purpose of making it is that in the previous predictions we just used a middle chunk. Used least square.
+##That was not a model probably we will be finally looking for. We shall use our recent prediction with an elastic net model.
+
+---
+title: "model performance water table depth"
+author: "Alokesh Manna"
+date: '2023-07-27'
+output: word_document
+---
+
+
+
+```{r setup, include=FALSE,fig.width=1.6,fig.height=1.6}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = TRUE)
+```
+##Big var model<https://github.com/wbnicholson/BigVAR>, <https://cran.r-project.org/web/packages/BigVAR/vignettes/BigVAR.html#install>
+
+```{r}
+#install.packages("devtools")
+library(devtools)
+
+#install_github("wbnicholson/BigVAR/BigVAR")
+ #install.packages("BigVAR")
+library("BigVAR")
+library(palmerpenguins)
+#library(tidyverse)
+library(ggplot2)
+library(dplyr)
+#install.packages("ggpmisc")
+#library(ggpmisc)
+#install.packages("hydroGOF")
+library("hydroGOF")
+```
+
+##Here we save all the data that we have for 3 weather station.
+```{r}
+# save(dat_ws80_2006_2019,file="/Users/alokesh.manna17gmail.com/NSF_internship_2023/raw_data/dat_ws80_2006_2019.Rda")
+# save(dat_ws77_2006_2019,file="/Users/alokesh.manna17gmail.com/NSF_internship_2023/raw_data/dat_ws77_2006_2019.Rda")
+ #save(dat_ws78_2006_2019,file="/Users/alokesh.manna17gmail.com/NSF_internship_2023/raw_data/dat_ws78_2006_2019.Rda")
+```
+##Load the data and see the columns
+
+```{r}
+load("~/NSF_internship_2023/raw_data/dat_ws77_2006_2019.Rda")
+load("~/NSF_internship_2023/raw_data/dat_ws78_2006_2019.Rda")
+load("~/NSF_internship_2023/raw_data/dat_ws80_2006_2019.Rda")
+colnames(dat_ws77_2006_2019)
+colnames(dat_ws78_2006_2019)
+colnames(dat_ws80_2006_2019)
+
+##Data preparation for bigvar. First 2 columns are 2 outputs of Y variable. Well depth and depth measure.
+library(dplyr)
+Y_77=dat_ws77_2006_2019%>%dplyr::select(c(Depth_cm_b,elev_m_asl,Air_Temp_C,Soil_Temp_,Rainfall,DailyFlow,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa))
+
+Y_78=dat_ws78_2006_2019%>%dplyr::select(c(Depth_cm_b,Elev_m_asl,Air_Temp_C,Soil_Temp,Rainfall_m.x,Daily_Flow_newdata,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa))
+
+Y_80=dat_ws80_2006_2019%>%dplyr::select(c(Water.Table.Depth.BGS..cm.,Elevation.of.water.table.ASL..m.,Ave_air_T,Soil_Temp_,Rainfall_m,DailyFlow_,Ave_solar,net_rad,PET,RH,Windspeed_,Wind_direc,Ave_vapor_))
+```
+```{r}
+dim(Y_77)
+dim(Y_78)
+dim(Y_80)
+```
+```{r}
+year_array=c(2006:2019)
+month_array=c(1:12)
+```
+
+```{r}
+Y_80_monthly=dat_ws80_2006_2019%>%dplyr::select(c(Water.Table.Depth.BGS..cm.,Elevation.of.water.table.ASL..m.,Ave_air_T,Soil_Temp_,Rainfall_m,DailyFlow_,Ave_solar,net_rad,PET,RH,Windspeed_,Wind_direc,Ave_vapor_,month_extracted,year_extracted))%>%drop_na()
+
+monthly_data_ws80_monthlystack=array(rep(0,12*16*14),dim=c(12,16,14))##monthly_data_ws77_monthlystack[,,j] is the matrix for the month month_array[j],last and first 12 months 14 years
+colnames(monthly_data_ws80_monthlystack)=c(colnames(Y_80_monthly),"rain")
+for(i in 1:14){
+  for(j in 1:12){
+    dat_filtered=Y_80_monthly%>%filter(year_extracted==year_array[i])%>%filter(month_extracted==j)
+    dat_temp=dat_filtered%>%group_by(month_extracted)%>%colMeans()
+    #data.frame(dat_temp)%>%colMeans()
+    rain=as.numeric(dat_temp["Rainfall_m"])*dim(dat_filtered)[1]##Rain cannot ve averaged, so again sum
+ monthly_data_ws80_monthlystack[j,,i]= c(as.numeric(dat_temp),rain)
+ #print(i)
+# print(j)
+  }
+}
+#head(monthly_data_ws77_monthlystack)
+#monthly_data_ws80_monthlystack[,,5]##should print May data for all years ws 77
+#Now we stack all the data monthly
+B=NULL
+for (i in 1:14){ 
+  A<-rbind(B,monthly_data_ws80_monthlystack[,,i])
+  B=A
+}
+head(B)
+dim(B)
+```
+
+
+
+
+
+
+
+
+
+
+
+##Here we just take the depth not the water table height.
+
+```{r}
+COEF_77=NULL
+COEF_78=NULL
+COEF_80=NULL
+
+```
+
+```{r}
+preformance_test_depth_77=NULL
+preformance_test_depth_78=NULL
+preformance_test_depth_80=NULL
+```
+
+```{r}
+preformance_train_depth_77=NULL
+preformance_train_depth_78=NULL
+preformance_train_depth_80=NULL
+```
+
+
+```{r}
+#Y_77=dat_ws77_2006_2019%>%dplyr::select(c(elev_m_asl,Air_Temp_C,Soil_Temp_,Rainfall,Avg_FlowRa,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa))
+Y_77=dat_ws77_2006_2019%>%drop_na%>%dplyr::select(c(Depth_cm_b,Air_Temp_C,Soil_Temp_,Rainfall,DailyFlow,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa))
+VARX=list()
+VARX$k=1 # indicates that the first two series are modeled
+VARX$m=11
+VARX$s=2 # sets 2 as the maximal lag order for exogenous series
+Model1_77=constructModel(data.matrix(Y_77),p=4,struct='BasicEN',gran=c(500,10),verbose=FALSE,VARX=VARX,T1=floor(nrow(Y_77)/3),T2=floor(2*nrow(Y_77)/3))
+
+results=cv.BigVAR(Model1_77)
+#results
+#plot(results)
+#SparsityPlot.BigVAR.results(results)
+#predict(results,n.ahead=1, confint=TRUE)
+#coef(results)
+COEF_77=COEF_77%>%bind_rows(coef(results))
+```
+
+```{r}
+dim(Y_77)
+length(results@fitted)##You must get p differences as the traning starts p step ahead from begining. 
+length(results@preds)
+length(results@resids)
+sum((results@resids))
+#length(results@preds)+length(results@resids)
+#dim(as.matrix(Y_77%>%drop_na()))
+#sum(resids)
+#c(results@fitted[1:T1],results@fitted[(T2+1):nrow(Y)])
+results@preds[1360]
+results@fitted[4076] ##This two values are same confirming the fact that in fitted we have the prediction values in last length(results@preds)=1360 values.
+```
+
+##Already NA is dropped.
+
+```{r,,fig.width=2,fig.height=2}
+Y=Y_77%>%dplyr::select("Depth_cm_b")%>%as.matrix()
+X=Y_77%>%dplyr::select(-c("Depth_cm_b"))%>%as.matrix()
+#T1=floor(nrow(Y)/3)
+#T2=floor(2*nrow(Y)/3)
+#X <- matrix(0,nrow=nrow(Y),ncol=ncol(Y))
+#BICMSFE <- VARXForecastEval(Y,X,p=4,s=2,T1,T2,"BIC",1)##****This part gives the error.
+#length(BICMSFE$pred)
+#y=tail(Y,length(BICMSFE$pred))
+
+
+x=results@preds
+y=tail(Y,length(x)) #actual
+mon=dat_ws77_2006_2019%>%drop_na%>%dplyr::select("month_extracted")
+mon=tail(mon$month_extracted,length(x))
+
+#c(results@fitted[1:T1],results@fitted[(T2+1):nrow(Y)]) 
+
+preformance_test_depth_77=preformance_test_depth_77%>%bind_rows("daily"=data.frame(gof(y, x)))
+
+pic=data.frame(y,x,mon)%>%mutate(Month=as.factor(mon))
+ggplot(pic,aes(x,y))+
+  geom_point(aes(colour=Month)) +
+  scale_fill_manual(values =c(pic$Month))+
+  geom_abline()+
+  coord_fixed() +
+  xlab("predicted")+
+  ylab("act")+
+  ylim(-300,100)+
+  xlim(-300,100)+
+  #ggtitle('water table depth y=x, in cm, daily ws77 recent_time')+
+theme(plot.title = element_text(size = 10, face = "bold"),legend.spacing.y = unit(.001, 'cm'),legend.spacing.x = unit(.001, 'cm'),legend.position='bottom',legend.key.size =  unit(.03, 'cm'))
+
+ggsave(file="water table depth y=x, in cm, daily ws77_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r}
+# plot.new()
+# date=tail(dat_ws77_2006_2019%>%drop_na%>%dplyr::select(c("Date_")),length(x))$Date_
+# length(x)
+# length(y)
+# length(date)
+# plot(date,x,ty="l", col="blue", pch="o", ylab="water table depth",xlab="date",ylim=c(-300,0),lty=1)
+# lines(c(date),y,ty="l", col="red", pch="o",lty=2)
+# legend("bottomright",                          
+#        c("predicted", "act"),
+#        lty=c(1,2),
+#        col = c("blue","red"))
+#date=dat_ws77_2006_2019%>%drop_na%>%dplyr::select(c("Date_"))
+date=tail(dat_ws77_2006_2019%>%drop_na%>%dplyr::select(c("Date_")),length(x))$Date_
+dat=data.frame(date,predicted= x, actual= y[,1])
+ggplot(dat,aes(date))+
+  #coord_fixed() +
+  geom_line(aes(y=predicted, colour = "predicted")) + 
+  geom_line(aes(y=actual, colour = "actual"))+
+  xlab("Date")+
+  ylab("water table elevation")+
+  ylim(-300,0)+
+  #xlim(-300,100)+
+  #labs(color = Legend)+
+  ggtitle('water table depth time series prediction recent time for daily ws 77')+
+theme(plot.title = element_text(size = 10, face = "bold"),legend.spacing.y = unit(0, 'cm'),legend.spacing.x = unit(0, 'cm'),legend.position='right',legend.key.size =  unit(.15, 'cm'))
+ggsave(file="depth in cm prediction ts plot recent time, daily ws77", device = "png",path="pictures_new_well_depth_recent_time")
+
+```
+
+```{r}
+dat77=dat
+```
+
+```{r}
+
+newdat=dat77
+
+sd=sd(dat77$predicted-dat77$actual)
+  
+newdat$lower=dat77$predicted-3*sd
+newdat$upper=dat77$predicted+3*sd
+
+date_df=data.frame(date=dat_ws77_2006_2019%>%
+                     dplyr::select(c("Date_"))|>
+                     filter(Date_>=newdat$date[1])|>
+                     pull(Date_)|>
+                     c())
+
+ggplot(date_df|>left_join(newdat),aes(date, predicted)) +
+  geom_point(aes(y=predicted, colour = "predicted"),pch=2) + 
+  geom_point(aes(y=actual, colour = "actual"),pch=4)+
+  xlab("Date")+
+  ylab("water table depth")+
+  ylim(-250,100)+
+  #xlim(-1,3)+
+  #labs(color = Legend)+
+  ggtitle('water table depth time series prediction recent time for daily ws 77')+
+  #geom_smooth(stat = 'summary', fun.data = mean_cl_quantile(x))+
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = "Confidence Interval"), alpha = 0.4)+
+  theme_minimal()+
+theme(axis.title = element_text(size = 25), 
+      plot.title = element_text(size = 15, face = "plain"),
+      legend.spacing.y = unit(0, 'cm'),
+      legend.spacing.x = unit(0, 'cm'),
+      legend.position=c(0.5,0.1),
+      legend.key.size =  unit(.15, 'cm'),
+      axis.line = element_line(color='black'),
+      plot.background = element_blank(),
+      panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank()
+    )
+  
+  #stat_summary(geom = "line", fun = mean) +
+  #stat_summary(geom = "ribbon", fun.data = mean_cl_quantile, alpha = 0.3)
+
+```
+```{r}
+gof(dat$predicted,dat$actual)
+```
+
+```{r}
+mod_77_daily=lm(dat$actual~dat$predicted)
+```
+
+```{r}
+summary(mod_77_daily)
+```
+
+```{r}
+#cbind(x,y,BICMSFE$MSFE,x-y)
+```
+
+##Here I want to produce graphs which gives as a fascet for individual months
+```{r}
+pic =bind_cols(y,x,mon)%>%mutate(Month=as.factor(mon))%>%ggplot(aes(x = x, y = y,color=Month)) +
+  scale_fill_manual(values = c(mon))+
+  geom_point() +
+  geom_abline()+
+  coord_fixed() +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+  #ggtitle("water table depth, cm, monthly-facet-daily ws77")+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ pic+ facet_wrap(~Month)
+ # facet_grid(mon)
+ggsave(file="water table depth, cm, monthly-facet-daily ws77_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time") 
+```
+
+
+
+
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+
+ggplot( data = data.frame(x,y),aes(x,y)) +
+  # stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq","adj.R2", "f", "p")),size = 1.6) +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+  #ggtitle("water table depth, in cm, daily ws77")+
+  theme(plot.title = element_text(size = 8, face = "bold"))+
+  geom_point()
+ggsave(file="water table depth, in cm, daily ws77_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r}
+
+library(ggplot2)
+
+#create residual plot with title and axis labels
+ggplot(data = data.frame(x,y), aes(x = x, y = y-x)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE)+
+  labs( x='Fitted Values', y='Residuals')+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="Residual analysis, water table depth, in cm, daily ws77_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r,fig.width=1.6,fig.height=1.6}
+#Y_78=dat_ws78_2006_2019%>%dplyr::select(c(Depth_cm_b,Elev_m_asl,Air_Temp_C,Soil_Temp,Rainfall_m.x,Daily_Flow_newdata,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa))
+Y_78=dat_ws78_2006_2019%>%drop_na()%>%dplyr::select(c(Depth_cm_b,Air_Temp_C,Soil_Temp,Rainfall_m.x,Daily_Flow_newdata,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa))
+
+VARX=list()
+VARX$k=1 # indicates that the first two series are modeled
+VARX$m=11
+VARX$s=2 # sets 2 as the maximal lag order for exogenous series
+Model1_78=constructModel(data.matrix(Y_78%>%drop_na),p=4,struct='BasicEN',gran=c(500,10),verbose=FALSE,VARX=VARX,T1=floor(nrow(Y_78)/3),T2=floor(2*nrow(Y_78)/3))
+
+results=cv.BigVAR(Model1_78)
+#results
+#plot(results)
+#SparsityPlot.BigVAR.results(results)
+#predict(results,n.ahead=1, confint=TRUE)
+#coef(results)
+COEF_78=COEF_78%>%bind_rows(coef(results))
+```
+
+```{r,fig.width=2,fig.height=2}
+Y=Y_78%>%drop_na()%>%dplyr::select("Depth_cm_b")%>%as.matrix()
+X=Y_78%>%drop_na()%>%dplyr::select(-c("Depth_cm_b"))%>%as.matrix()
+#T1=floor(nrow(Y)/3)
+#T2=floor(2*nrow(Y)/3)
+#X <- matrix(0,nrow=nrow(Y),ncol=ncol(Y))
+#BICMSFE <- VARXForecastEval(Y,X,p=4,s=2,T1,T2,"BIC",1)##****This part gives the error.
+#length(BICMSFE$pred)
+#y=tail(Y,length(BICMSFE$pred))
+#mon=dat_ws78_2006_2019%>%dplyr::select("month_extracted")
+#mon=mon$month_extracted[((T1+1):T2)]
+#y=c(Y[c(T1+1):T2,1])
+#x=c(BICMSFE$pred)
+x=results@preds
+y=tail(Y,length(x))
+mon=dat_ws77_2006_2019%>%drop_na%>%dplyr::select("month_extracted")
+mon=tail(mon$month_extracted,length(x))
+
+preformance_test_depth_78=preformance_test_depth_78%>%bind_cols(data.frame(gof(y, x)))
+
+# plot(x,y,ylim=c(-300,100),xlim=c(-300,100),xlab="predicted",ylab="act",col=mon,pch=19)
+# title('water table depth y=x, in cm, daily ws78',cex.main=.3)
+# abline(0,1)
+# legend("bottomright", legend = paste("Month", 1:12), col = 1:12, pch = 19, bty = "n",cex=0.3)
+
+
+pic=data.frame(y,x,mon)%>%mutate(Month=as.factor(mon))
+ggplot(pic,aes(x,y))+
+  geom_point(aes(colour=Month)) +
+  scale_fill_manual(values =c(pic$Month))+
+  geom_abline()+
+  coord_fixed() +
+  xlab("predicted")+
+  ylab("act")+
+  ylim(-300,100)+
+  xlim(-300,100)+
+  #ggtitle('water table depth y=x, in cm, daily ws78')+
+theme(plot.title = element_text(size = 10, face = "bold"),legend.spacing.y = unit(.001, 'cm'),legend.spacing.x = unit(.001, 'cm'),legend.position='bottom',legend.key.size =  unit(.03, 'cm'))
+ggsave(file="water table depth y=x, in cm, daily ws78_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+```{r}
+# plot.new()
+# date=tail(dat_ws78_2006_2019%>%drop_na%>%dplyr::select(c("Date_")),length(x))$Date_
+# length(x)
+# length(y)
+# length(date)
+# plot(date,x,ty="l", col="blue", pch="o", ylab="water table depth",xlab="date",ylim=c(-300,0),lty=1)
+# lines(c(date),y,ty="l", col="red", pch="o",lty=2)
+# legend("bottomright",                          
+#        c("predicted", "act"),
+#        lty=c(1,2),
+#        col = c("blue","red"))
+date=tail(dat_ws78_2006_2019%>%drop_na%>%dplyr::select(c("Date_")),length(x))$Date_
+dat=data.frame(date,predicted= x, actual= y[,1])
+
+ggplot(data = data.frame(date,predicted= x, actual= y[,1]),aes(date))+
+  coord_fixed() +
+  geom_line(aes(y=predicted, colour = "predicted")) + 
+  geom_line(aes(y=actual, colour = "act"))+
+  xlab("Date")+
+  ylab("water table elevation")+
+  ylim(-300,0)+
+  #xlim(-300,100)+
+  #labs(color = Legend)+
+  ggtitle('water table depth time series prediction recent time for daily ws 78')+
+theme(plot.title = element_text(size = 10, face = "bold"),legend.spacing.y = unit(0, 'cm'),legend.spacing.x = unit(0, 'cm'),legend.position='right',legend.key.size =  unit(.15, 'cm'))
+ggsave(file="depth in cm prediction ts plot recent time, daily ws78", device = "png",path="pictures_new_well_depth_recent_time")
+```
+```{r}
+dat78=dat
+```
+
+
+```{r}
+
+newdat=dat78
+
+sd=sd(dat78$predicted-dat78$actual)
+  
+newdat$lower=dat78$predicted-3*sd
+newdat$upper=dat78$predicted+3*sd
+
+date_df=data.frame(date=dat_ws78_2006_2019%>%
+                     dplyr::select(c("Date_"))|>
+                     filter(Date_>=newdat$date[1])|>
+                     pull(Date_)|>
+                     c())
+
+ggplot(date_df|>left_join(newdat),aes(date, predicted)) +
+#ggplot(newdat,aes(date, predicted)) +
+  geom_point(aes(y=predicted, colour = "predicted"),pch=2) + 
+  geom_point(aes(y=actual, colour = "actual"),pch=4)+
+  xlab("Date")+
+  ylab("water table depth")+
+  ylim(-250,100)+
+  #xlim(-1,3)+
+  #labs(color = Legend)+
+  ggtitle('water table depth time series prediction recent time for daily ws 78')+
+  #geom_smooth(stat = 'summary', fun.data = mean_cl_quantile(x))+
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = "Confidence Interval"), alpha = 0.4)+
+  theme_minimal()+
+theme(axis.title = element_text(size = 25), 
+      plot.title = element_text(size = 18, face = "plain"),
+      legend.spacing.y = unit(0, 'cm'),
+      legend.spacing.x = unit(0, 'cm'),
+      legend.position=c(0.5,0.1),
+      legend.key.size =  unit(.15, 'cm'),
+      axis.line = element_line(color='black'),
+      plot.background = element_blank(),
+      panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank()
+    )
+  
+  #stat_summary(geom = "line", fun = mean) +
+  #stat_summary(geom = "ribbon", fun.data = mean_cl_quantile, alpha = 0.3)
+
+```
+A wet year plot 2016
+```{r}
+
+newdat=dat78|>filter(date<"2017-01-01")|>filter(date>"2015-12-31")
+
+sd=sd(dat78$predicted-dat78$actual)
+  
+newdat$lower=newdat$predicted-3*sd
+newdat$upper=newdat$predicted+3*sd
+
+date_df=data.frame(date=dat_ws78_2006_2019%>%
+                     dplyr::select(c("Date_"))|>
+                     filter(Date_>=newdat$date[1])|>
+                     pull(Date_)|>
+                     c())
+
+ggplot(date_df|>
+         left_join(newdat)|>
+         filter(date<"2017-01-01")|>
+         filter(date>"2015-12-31"),aes(date, predicted)) +
+#ggplot(newdat,aes(date, predicted)) +
+  geom_point(aes(y=predicted, colour = "predicted"),pch=2) + 
+  geom_point(aes(y=actual, colour = "actual"),pch=4)+
+  xlab("Date")+
+  ylab("water table depth")+
+  ylim(-250,100)+
+  #xlim(-1,3)+
+  #labs(color = Legend)+
+  ggtitle('water table depth time series prediction wet season for daily ws 78')+
+  #geom_smooth(stat = 'summary', fun.data = mean_cl_quantile(x))+
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = "Confidence Interval"), alpha = 0.4)+
+  theme_minimal()+
+theme(axis.title = element_text(size = 25), 
+      plot.title = element_text(size = 18, face = "plain"),
+      legend.spacing.y = unit(0, 'cm'),
+      legend.spacing.x = unit(0, 'cm'),
+      legend.position=c(0.5,0.1),
+      legend.key.size =  unit(.15, 'cm'),
+      axis.line = element_line(color='black'),
+      plot.background = element_blank(),
+      panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank()
+    )
+  
+  #stat_summary(geom = "line", fun = mean) +
+  #stat_summary(geom = "ribbon", fun.data = mean_cl_quantile, alpha = 0.3)
+
+```
+
+
+
+
+
+
+
+
+
+A dry year plot 2007
+```{r}
+
+newdat=dat78|>filter(date<"2008-01-01")|>filter(date>"2006-12-31")
+
+sd=sd(dat78$predicted-dat78$actual)
+  
+newdat$lower=newdat$predicted-3*sd
+newdat$upper=newdat$predicted+3*sd
+
+date_df=data.frame(date=dat_ws78_2006_2019%>%
+                     dplyr::select(c("Date_"))|>
+                     filter(Date_>=newdat$date[1])|>
+                     pull(Date_)|>
+                     c())
+
+ggplot(date_df|>
+         left_join(newdat)|>
+         filter(date<"2008-01-01")|>
+         filter(date>"2006-12-31"),aes(date, predicted)) +
+#ggplot(newdat,aes(date, predicted)) +
+  geom_point(aes(y=predicted, colour = "predicted"),pch=2) + 
+  geom_point(aes(y=actual, colour = "actual"),pch=4)+
+  xlab("Date")+
+  ylab("water table depth")+
+  ylim(-250,100)+
+  #xlim(-1,3)+
+  #labs(color = Legend)+
+  ggtitle('water table depth time series prediction recent time for daily ws 78')+
+  #geom_smooth(stat = 'summary', fun.data = mean_cl_quantile(x))+
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = "Confidence Interval"), alpha = 0.4)+
+  theme_minimal()+
+theme(axis.title = element_text(size = 25), 
+      plot.title = element_text(size = 18, face = "plain"),
+      legend.spacing.y = unit(0, 'cm'),
+      legend.spacing.x = unit(0, 'cm'),
+      legend.position=c(0.5,0.1),
+      legend.key.size =  unit(.15, 'cm'),
+      axis.line = element_line(color='black'),
+      plot.background = element_blank(),
+      panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank()
+    )
+  
+  #stat_summary(geom = "line", fun = mean) +
+  #stat_summary(geom = "ribbon", fun.data = mean_cl_quantile, alpha = 0.3)
+
+```
+
+
+```{r}
+gof(dat$predicted,dat$actual)
+```
+
+```{r}
+mod_78_daily=lm(dat$actual~dat$predicted)
+```
+
+```{r}
+summary(mod_78_daily)
+```
+
+```{r}
+pic =bind_cols(y,x,mon)%>%mutate(Month=as.factor(mon))%>%ggplot(aes(x = x, y = y,color=Month)) +
+  scale_fill_manual(values = c(mon))+
+  geom_point() +
+  geom_abline()+
+  coord_fixed() +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+  #ggtitle("water table depth, cm, monthly-facet-daily ws78")+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ pic+ facet_wrap(~Month)
+ # facet_grid(mon)
+ggsave(file="water table depth, cm, monthly-facet-daily ws78_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time") 
+```
+
+```{r,fig.width=1.6,fig.height=1.6}
+
+ggplot( data = data.frame(x,y),aes(x,y)) +
+  # stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq","adj.R2", "f", "p")),size = 1.6) +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+  #ggtitle("water table depth, in cm, daily ws78")+
+  geom_point()+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ggsave(file="water table depth, in cm, daily ws78_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r}
+
+library(ggplot2)
+
+#create residual plot with title and axis labels
+ggplot(data = data.frame(x,y), aes(x = x, y = y-x)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE)+
+  labs(x='Fitted Values', y='Residuals')+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="Residual analysis, water table depth, in cm, daily ws78_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+Y_80=dat_ws80_2006_2019%>%drop_na()%>%dplyr::select(c(Water.Table.Depth.BGS..cm.,Ave_air_T,Soil_Temp_,Rainfall_m,DailyFlow_,Ave_solar,net_rad,PET,RH,Windspeed_,Wind_direc,Ave_vapor_))
+VARX=list()
+VARX$k=1 # indicates that the first two series are modeled
+VARX$m=11
+VARX$s=2 # sets 2 as the maximal lag order for exogenous series
+Model1_80=constructModel(data.matrix(Y_80%>%drop_na),p=4,struct='BasicEN',gran=c(500,10),verbose=FALSE,VARX=VARX,T1=floor(nrow(Y_80)/3),T2=floor(2*nrow(Y_80)/3))
+
+results=cv.BigVAR(Model1_80)
+# results
+# plot(results)
+# #SparsityPlot.BigVAR.results(results)
+# predict(results,n.ahead=1, confint=TRUE)
+# coef(results)
+COEF_80=COEF_80%>%bind_rows(coef(results))
+```
+
+```{r,fig.width=2,fig.height=2}
+Y=Y_80%>%drop_na()%>%dplyr::select("Water.Table.Depth.BGS..cm.")%>%as.matrix()
+X=Y_80%>%drop_na()%>%dplyr::select(-c("Water.Table.Depth.BGS..cm."))%>%as.matrix()
+# T1=floor(nrow(Y)/3)
+# T2=floor(2*nrow(Y)/3)
+# #X <- matrix(0,nrow=nrow(Y),ncol=ncol(Y))
+# BICMSFE <- VARXForecastEval(Y,X,p=4,s=2,T1,T2,"BIC",1)##****This part gives the error.
+# BICMSFE
+# length(BICMSFE$pred)
+
+# mon=dat_ws80_2006_2019%>%dplyr::select("month_extracted")
+# mon=mon$month_extracted[((T1+1):T2)]
+# y=c(Y[c(T1+1):T2,1])
+# x=c(BICMSFE$pred)
+
+x=results@preds
+y=tail(Y,length(x))
+mon=dat_ws80_2006_2019%>%drop_na%>%dplyr::select("month_extracted")
+mon=tail(mon$month_extracted,length(x))
+
+preformance_test_depth_80=preformance_test_depth_80%>%bind_cols(data.frame(gof(y, x)))
+
+# plot(x,y,ylim=c(-300,100),xlim=c(-300,100),xlab="predicted",ylab="act",col=mon,pch=19)
+# title('water table depth y=x, in cm, daily ws80',cex.main=.5)
+# abline(0,1)
+# legend("bottomright", legend = paste("Month", 1:12), col = 1:12, pch = 19, bty = "n",cex=0.3)
+
+pic=data.frame(y,x,mon)%>%mutate(Month=as.factor(mon))
+ggplot(pic,aes(x,y))+
+  geom_point(aes(colour=Month)) +
+  scale_fill_manual(values =c(pic$Month))+
+  geom_abline()+
+  coord_fixed() +
+  xlab("predicted")+
+  ylab("act")+
+  ylim(-300,100)+
+  xlim(-300,100)+
+  #ggtitle('water table depth y=x, in cm, daily ws80')+
+theme(plot.title = element_text(size = 5, face = "bold"),legend.spacing.y = unit(0, 'cm'),legend.spacing.x = unit(0, 'cm'),legend.position='bottom',legend.key.size =  unit(.03, 'cm'))
+ggsave(file="water table depth y=x, in cm, daily ws80_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r}
+# plot.new()
+# date=tail(dat_ws80_2006_2019%>%drop_na%>%dplyr::select(c("Date_")),length(x))$Date_
+# length(x)
+# length(y)
+# length(date)
+# plot(date,x,ty="l", col="blue", pch="o", ylab="water table depth",xlab="date",ylim=c(-300,0),lty=1)
+# lines(c(date),y,ty="l", col="red", pch="o",lty=2)
+# legend("bottomright",                          
+#        c("predicted", "act"),
+#        lty=c(1,2),
+#        col = c("blue","red"))
+date=tail(dat_ws80_2006_2019%>%drop_na%>%dplyr::select(c("Date_")),length(x))$Date_
+dat=data.frame(date,predicted= x, actual= y[,1])
+
+ggplot(data = data.frame(date,predicted= x, act= y[,1]),aes(date))+
+  coord_fixed() +
+  geom_line(aes(y=predicted, colour = "predicted")) + 
+  geom_line(aes(y=act, colour = "act"))+
+  xlab("Date")+
+  ylab("water table elevation")+
+  ylim(-300,0)+
+  #xlim(-300,100)+
+  #labs(color = Legend)+
+  ggtitle('water table depth time series prediction recent time for daily ws 80')+
+theme(plot.title = element_text(size = 10, face = "bold"),legend.spacing.y = unit(0, 'cm'),legend.spacing.x = unit(0, 'cm'),legend.position='right',legend.key.size =  unit(.15, 'cm'))
+ggsave(file="depth in cm prediction ts plot recent time, daily ws80", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+```{r}
+dat80=dat
+```
+
+```{r}
+
+newdat=dat80
+
+sd=sd(dat80$predicted-dat80$actual)
+  
+newdat$lower=dat80$predicted-3*sd
+newdat$upper=dat80$predicted+3*sd
+
+date_df=data.frame(date=dat_ws80_2006_2019%>%
+                     dplyr::select(c("Date_"))|>
+                     filter(Date_>=newdat$date[1])|>
+                     pull(Date_)|>
+                     c())
+
+ggplot(date_df|>left_join(newdat),aes(date, predicted)) +
+#ggplot(newdat,aes(date, predicted)) +
+  geom_point(aes(y=predicted, colour = "predicted"),pch=2) + 
+  geom_point(aes(y=actual, colour = "actual"),pch=4)+
+  xlab("Date")+
+  ylab("water table depth")+
+  ylim(-250,100)+
+  #xlim(-1,3)+
+  #labs(color = Legend)+
+  ggtitle('water table depth time series prediction recent time for daily ws 80')+
+  #geom_smooth(stat = 'summary', fun.data = mean_cl_quantile(x))+
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = "Confidence Interval"), alpha = 0.4)+
+  theme_minimal()+
+theme(axis.title = element_text(size = 25), 
+      plot.title = element_text(size = 18, face = "plain"),
+      legend.spacing.y = unit(0, 'cm'),
+      legend.spacing.x = unit(0, 'cm'),
+      legend.position=  c(0.1,0.8)   ,#c(0.1,0.90),
+      legend.key.size =  unit(.7, 'cm'),
+      axis.line = element_line(color='black'),
+      plot.background = element_blank(),
+      panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank()
+    )
+  
+  #stat_summary(geom = "line", fun = mean) +
+  #stat_summary(geom = "ribbon", fun.data = mean_cl_quantile, alpha = 0.3)
+
+```
+A wet year plot 2016 for WS 80
+```{r}
+
+newdat=dat80|>filter(date<"2017-01-01")|>filter(date>"2015-12-31")
+
+sd=sd(dat80$predicted-dat80$actual)
+  
+newdat$lower=newdat$predicted-3*sd
+newdat$upper=newdat$predicted+3*sd
+
+date_df=data.frame(date=dat_ws80_2006_2019%>%
+                     dplyr::select(c("Date_"))|>
+                     filter(Date_>=newdat$date[1])|>
+                     pull(Date_)|>
+                     c())
+
+ggplot(date_df|>
+         left_join(newdat)|>
+         filter(date<"2017-01-01")|>
+         filter(date>"2015-12-31"),aes(date, predicted)) +
+#ggplot(newdat,aes(date, predicted)) +
+  geom_point(aes(y=predicted, colour = "predicted"),pch=2) + 
+  geom_point(aes(y=actual, colour = "actual"),pch=4)+
+  xlab("Date")+
+  ylab("water table depth")+
+  ylim(-250,100)+
+  #xlim(-1,3)+
+  #labs(color = Legend)+
+  ggtitle('water table depth daily level prediction for wet season 2016 ws 80')+
+  #geom_smooth(stat = 'summary', fun.data = mean_cl_quantile(x))+
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = "Confidence Interval"), alpha = 0.4)+
+  theme_minimal()+
+theme(axis.title = element_text(size = 25), 
+      plot.title = element_text(size = 18, face = "plain"),
+      legend.spacing.y = unit(0, 'cm'),
+      legend.spacing.x = unit(0, 'cm'),
+      legend.position=c(0.1,0.9),
+      legend.key.size =  unit(.15, 'cm'),
+      axis.line = element_line(color='black'),
+      plot.background = element_blank(),
+      panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank()
+    )
+  
+  #stat_summary(geom = "line", fun = mean) +
+  #stat_summary(geom = "ribbon", fun.data = mean_cl_quantile, alpha = 0.3)
+
+```
+
+
+
+
+A dry year plot 2019 for WS 80
+```{r}
+
+newdat=dat80|>filter(date<"2020-01-01")|>filter(date>"2018-12-31")
+
+sd=sd(dat80$predicted-dat80$actual)
+  
+newdat$lower=newdat$predicted-3*sd
+newdat$upper=newdat$predicted+3*sd
+
+date_df=data.frame(date=dat_ws80_2006_2019%>%
+                     dplyr::select(c("Date_"))|>
+                     filter(Date_>=newdat$date[1])|>
+                     pull(Date_)|>
+                     c())
+
+ggplot(date_df|>
+         left_join(newdat)|>
+         filter(date<"2020-01-01")|>
+         filter(date>"2018-12-31"),aes(date, predicted)) +
+#ggplot(newdat,aes(date, predicted)) +
+  geom_point(aes(y=predicted, colour = "predicted"),pch=2) + 
+  geom_point(aes(y=actual, colour = "actual"),pch=4)+
+  xlab("Date")+
+  ylab("water table depth")+
+  ylim(-250,100)+
+  #xlim(-1,3)+
+  #labs(color = Legend)+
+  ggtitle('water table depth daily level prediction for dry season 2019 ws 80')+
+  #geom_smooth(stat = 'summary', fun.data = mean_cl_quantile(x))+
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = "Confidence Interval"), alpha = 0.4)+
+  theme_minimal()+
+theme(axis.title = element_text(size = 25), 
+      plot.title = element_text(size = 18, face = "plain"),
+      legend.spacing.y = unit(0, 'cm'),
+      legend.spacing.x = unit(0, 'cm'),
+      legend.position=c(0.1,0.9),
+      legend.key.size =  unit(.15, 'cm'),
+      axis.line = element_line(color='black'),
+      plot.background = element_blank(),
+      panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank()
+    )
+  
+  #stat_summary(geom = "line", fun = mean) +
+  #stat_summary(geom = "ribbon", fun.data = mean_cl_quantile, alpha = 0.3)
+
+```
+
+```{r}
+gof(dat$predicted,dat$actual)
+```
+
+
+```{r}
+mod_80_daily=lm(dat$actual~dat$predicted)
+```
+
+```{r}
+summary(mod_80_daily)
+```
+
+
+
+```{r}
+pic =bind_cols(y,x,mon)%>%mutate(Month=as.factor(mon))%>%ggplot(aes(x = x, y = y,color=Month)) +
+  scale_fill_manual(values = c(mon))+
+  geom_point() +
+  geom_abline()+
+  coord_fixed() +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+  ggtitle("water table depth, cm, monthly-facet-daily ws80")+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ pic+ facet_wrap(~Month)
+ # facet_grid(mon)
+ggsave(file="water table depth, cm, monthly-facet-daily ws80_recent_time.png.png", device = "png",path="pictures_new_well_depth_recent_time") 
+```
+
+
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+
+ggplot( data = data.frame(x,y),aes(x,y)) +
+  # stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq","adj.R2", "f", "p")),size = 1.6) +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+ 
+  
+  #ggtitle("water table depth, in cm, daily ws80_recent_time.png")+
+  geom_point()+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ggsave(file="water table depth, in cm, daily ws80_recent_time.png.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r}
+library(ggplot2)
+
+#create residual plot with title and axis labels
+ggplot(data = data.frame(x,y), aes(x = x, y = y-x)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE)+
+  labs(x='Fitted Values', y='Residuals')+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="Residual analysis, water table depth, in cm, daily ws80_recent_time.png.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+#plot(Y_77$elev_m_asl,Y_77$Depth_cm_b)
+```
+
+
+
+
+```{r}
+#plot(Y_78$Depth_cm_b,Y_78$Elev_m_asl)
+```
+```{r}
+#plot(Y_80$Water.Table.Depth.BGS..cm.,Y_80$Water.Table.Depth.BGS..cm.)
+```
+
+```{r}
+#plot(Y_77$Rainfall,Y_77$Avg_FlowRa)
+```
+
+```{r}
+#plot(Y_78$Rainfall_m.x,Y_78$Daily_Flow_newdata)
+```
+
+```{r}
+#plot(Y_80$Rainfall_m,Y_80$DailyFlow_)
+```
+
+```{r}
+#plot(Y_80$Rainfall_m[1:5111],Y_80$DailyFlow_[3:5113])
+
+```
+##Somehow rainfall does not affect directly on the well depth. I also did not find any direct relation with rainfall and daily flow. 
+
+
+##Now we shall try to see this model on monthly data.
+
+```{r,fig.width=1.6,fig.height=1.6}
+Y_80_monthly=dat_ws80_2006_2019%>%drop_na()%>%dplyr::select(c(Water.Table.Depth.BGS..cm.,Elevation.of.water.table.ASL..m.,Ave_air_T,Soil_Temp_,Rainfall_m,DailyFlow_,Ave_solar,net_rad,PET,RH,Windspeed_,Wind_direc,Ave_vapor_,month_extracted,year_extracted))
+
+monthly_data_ws80_monthlystack=array(rep(0,12*16*14),dim=c(12,16,14))##monthly_data_ws77_monthlystack[,,j] is the matrix for the month month_array[j],last and first 12 months 14 years
+colnames(monthly_data_ws80_monthlystack)=c(colnames(Y_80_monthly),"rain")
+for(i in 1:14){
+  for(j in 1:12){
+    dat_filtered=Y_80_monthly%>%filter(year_extracted==year_array[i])%>%filter(month_extracted==j)
+    dat_temp=dat_filtered%>%group_by(month_extracted)%>%colMeans(na.rm = TRUE)
+    #data.frame(dat_temp)%>%colMeans()
+    rain=as.numeric(dat_temp["Rainfall_m"])*dim(dat_filtered)[1]##Rain cannot ve averaged, so again sum
+ monthly_data_ws80_monthlystack[j,,i]= c(as.numeric(dat_temp),rain)
+ #print(i)
+# print(j)
+  }
+}
+#head(monthly_data_ws77_monthlystack)
+#monthly_data_ws80_monthlystack[,,5]##should print all months for 2009+5-1 data
+#Now we stack all the data monthly
+B_80=NULL
+for (i in 1:14){ 
+  A<-rbind(B_80,monthly_data_ws80_monthlystack[,,i])
+  B_80=A
+}
+# head(B_80)
+# dim(B)
+
+dim(B_80)
+#B_80[2:168 ,"Water.Table.Depth.BGS..cm."]
+
+B_80=cbind(B_80[1:167 ,"Water.Table.Depth.BGS..cm."],data.frame(B_80)%>%dplyr::select(-c(Water.Table.Depth.BGS..cm.))%>%slice(2:168))
+colnames(B_80)
+```
+
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+dat=B_80
+#data.matrix(Y_80%>%drop_na)
+
+VARX=list()
+VARX$k=1 # indicates that the first two series are modeled
+VARX$m=11
+VARX$s=2 # sets 2 as the maximal lag order for exogenous series
+Model2_80=constructModel(data.matrix(dat%>%dplyr::select(-c(Elevation.of.water.table.ASL..m.,Rainfall_m,month_extracted,year_extracted))%>%drop_na),p=4,struct='BasicEN',gran=c(500,10),verbose=FALSE,VARX=VARX,T1=floor(nrow(dat)/3),T2=floor(2*nrow(dat)/3))
+
+
+results=cv.BigVAR(Model2_80)
+# results
+# plot(results)
+# #SparsityPlot.BigVAR.results(results)
+# predict(results,n.ahead=1, confint=TRUE)
+# coef(results)
+colnames(dat%>%dplyr::select(-c(Elevation.of.water.table.ASL..m.,Rainfall_m,month_extracted,year_extracted)))
+COEF_80=COEF_80%>%bind_rows(coef(results))
+```
+#𝚃𝟷
+#: Integer, Start of forecast evaluation period.
+#𝚃𝟸
+#: Interger, End of forecast evaluation period.
+
+```{r,fig.width=1.6,fig.height=1.6}
+Y=dat%>%dplyr::select("B_80[1:167, \"Water.Table.Depth.BGS..cm.\"]")
+X=dat%>%dplyr::select(-c(Elevation.of.water.table.ASL..m.,Rainfall_m,month_extracted,year_extracted))
+# T1=floor(nrow(Y)/3)
+# T2=floor(2*nrow(Y)/3)
+# #X <- matrix(0,nrow=nrow(Y),ncol=ncol(Y))
+# BICMSFE <- VARXForecastEval(Y,X,p=4,s=2,T1,T2,"BIC",1)##****This part gives the error.
+# BICMSFE
+# y=Y[c((T1+1):T2),]
+# x=c(BICMSFE$pred)
+
+x=c(results@preds)
+y=tail(Y[,1],length(x))
+mon=dat_ws77_2006_2019%>%drop_na%>%dplyr::select("month_extracted")
+mon=tail(mon$month_extracted,length(x))
+
+
+preformance_test_depth_80=preformance_test_depth_80%>%bind_cols(data.frame(gof(y, x)))
+
+# plot(x,y,ylim=c(-300,100),xlim=c(-300,100),xlab="predicted",ylab="act",pch=19)
+# title(cex.main=.5)
+# abline(0,1)
+# ggsave(file="water table depth y=x, in cm, monthly ws80_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+
+ggplot( data = data.frame(x,y),aes(x,y)) +
+  # stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq","adj.R2", "f", "p")),size = 1.6) +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+  #ggtitle("water table depth, in cm, monthly ws80")+
+  geom_point()+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ggsave(file="water table depth, in cm, monthly ws80_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r}
+
+library(ggplot2)
+
+#create residual plot with title and axis labels
+ggplot(data = data.frame(x,y), aes(x = x, y = y-x)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE)+
+  labs( x='Fitted Values', y='Residuals')+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="Residual analysis, water table depth, in cm, monthly ws80_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+##For ws77
+
+```{r,fig.width=1.6,fig.height=1.6}
+# Y_80_monthly=dat_ws80_2006_2019%>%dplyr::select(c(Water.Table.Depth.BGS..cm.,Water.Table.Depth.BGS..cm.,Ave_air_T,Soil_Temp_,Rainfall_m,DailyFlow_,Ave_solar,net_rad,PET,RH,Windspeed_,Wind_direc,Ave_vapor_,month_extracted,year_extracted))
+
+Y_77_monthly=dat_ws77_2006_2019%>%drop_na()%>%dplyr::select(c(Depth_cm_b,elev_m_asl,Air_Temp_C,Soil_Temp_,Rainfall,DailyFlow,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa,month_extracted,year_extracted))
+
+# Y_78=dat_ws78_2006_2019%>%dplyr::select(c(Depth_cm_b,Elev_m_asl,Air_Temp_C,Soil_Temp,Rainfall_m.x,Daily_Flow_newdata,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa))
+
+
+monthly_data_ws77_monthlystack=array(rep(0,12*16*14),dim=c(12,16,14))##monthly_data_ws77_monthlystack[,,j] is the matrix for the month month_array[j],last and first 12 months 14 years
+colnames(monthly_data_ws77_monthlystack)=c(colnames(Y_77_monthly),"rain")
+for(i in 1:14){
+  for(j in 1:12){
+    dat_filtered=Y_77_monthly%>%filter(year_extracted==year_array[i])%>%filter(month_extracted==j)
+    dat_temp=dat_filtered%>%group_by(month_extracted)%>%colMeans(na.rm = TRUE)
+    #data.frame(dat_temp)%>%colMeans()
+    rain=as.numeric(dat_temp["Rainfall"])*dim(dat_filtered)[1]##Rain cannot ve averaged, so again sum
+ monthly_data_ws77_monthlystack[j,,i]= c(as.numeric(dat_temp),rain)
+ #print(i)
+# print(j)
+  }
+}
+#head(monthly_data_ws77_monthlystack)
+#monthly_data_ws80_monthlystack[,,5]##should print all months for 2009+5-1 data
+#Now we stack all the data monthly
+B_77=NULL
+for (i in 1:14){ 
+  A<-rbind(B_77,monthly_data_ws77_monthlystack[,,i])
+  B_77=A
+}
+# head(B_80)
+# dim(B)
+
+dim(B_77)
+#B_80[2:168 ,"Water.Table.Depth.BGS..cm."]
+
+B_77=cbind(B_77[1:167 ,"Depth_cm_b"],data.frame(B_77)%>%dplyr::select(-c(Depth_cm_b))%>%slice(2:168))
+```
+
+```{r,fig.width=1.6,fig.height=1.6}
+dat=B_77
+#data.matrix(Y_80%>%drop_na)
+
+VARX=list()
+VARX$k=1 # indicates that the first two series are modeled
+VARX$m=11
+VARX$s=2 # sets 2 as the maximal lag order for exogenous series
+Model2_77=constructModel(data.matrix(dat%>%dplyr::select(-c(elev_m_asl,Rainfall,month_extracted,year_extracted))%>%drop_na),p=4,struct='BasicEN',gran=c(500,10),verbose=FALSE,VARX=VARX,T1=floor(nrow(dat)/3),T2=floor(2*nrow(dat)/3))
+
+
+results=cv.BigVAR(Model2_77)
+# results
+# plot(results)
+# #SparsityPlot.BigVAR.results(results)
+# predict(results,n.ahead=1, confint=TRUE)
+# coef(results)
+colnames(dat%>%dplyr::select(-c(elev_m_asl,Rainfall,month_extracted,year_extracted)))
+COEF_77=COEF_77%>%bind_rows(coef(results))
+```
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+Y=dat%>%drop_na()%>%dplyr::select("B_77[1:167, \"Depth_cm_b\"]")
+X=dat%>%drop_na()%>%dplyr::select(-c(elev_m_asl,Rainfall,month_extracted,year_extracted))
+# T1=floor(nrow(Y)/3)
+# T2=floor(2*nrow(Y)/3)
+# #X <- matrix(0,nrow=nrow(Y),ncol=ncol(Y))
+# BICMSFE <- VARXForecastEval(Y,X,p=4,s=2,T1,T2,"BIC",1)##****This part gives the error.
+# BICMSFE
+# #y=Y[c((T2+2):151),]
+# #mon=dat_ws80_2006_2019%>%dplyr::select("month_extracted")
+# #mon=mon$month_extracted[((T1+1):T2)]
+# y=c(Y[c(T1+1):T2,1])
+# x=c(BICMSFE$pred)
+x=c(results@preds)
+y=tail(Y[,1],length(x))
+mon=dat_ws77_2006_2019%>%drop_na%>%dplyr::select("month_extracted")
+mon=tail(mon$month_extracted,length(x))
+
+preformance_test_depth_77=preformance_test_depth_77%>%bind_cols(data.frame(gof(y, x)))
+
+# plot(x,y,ylim=c(-300,100),xlim=c(-300,100),xlab="predicted",ylab="act",pch=19)
+# #title('water table depth y=x, in cm, monthly ws77_recent_time',cex.main=.5)
+# abline(0,1)
+# ggsave(file="water table depth y=x, in cm, monthly ws77_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+
+ggplot( data = data.frame(x,y),aes(x,y)) +
+  # stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq","adj.R2", "f", "p")),size = 1.6) +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+  #ggtitle("water table depth, in cm, monthly ws77")+
+  geom_point()+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ggsave(file="water table depth, in cm, monthly ws77_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+```{r}
+
+library(ggplot2)
+
+#create residual plot with title and axis labels
+ggplot(data = data.frame(x,y), aes(x = x, y = y-x)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE)+
+  #title='Residual analysis, water table depth, in cm, monthly ws77_recent_time',
+  labs( x='Fitted Values', y='Residuals')+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="Residual analysis, water table depth, in cm, monthly ws77_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+##WS78
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+# Y_80_monthly=dat_ws80_2006_2019%>%dplyr::select(c(Water.Table.Depth.BGS..cm.,Water.Table.Depth.BGS..cm.,Ave_air_T,Soil_Temp_,Rainfall_m,DailyFlow_,Ave_solar,net_rad,PET,RH,Windspeed_,Wind_direc,Ave_vapor_,month_extracted,year_extracted))
+
+# Y_77_monthly=dat_ws77_2006_2019%>%dplyr::select(c(Depth_cm_b,elev_m_asl,Air_Temp_C,Soil_Temp_,Rainfall,Avg_FlowRa,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa,month_extracted,year_extracted))
+
+ Y_78_monthly=dat_ws78_2006_2019%>%dplyr::select(c(Depth_cm_b,Elev_m_asl,Air_Temp_C,Soil_Temp,Rainfall_m.x,Daily_Flow_newdata,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa,month_extracted,year_extracted))
+
+
+monthly_data_ws78_monthlystack=array(rep(0,12*16*14),dim=c(12,16,14))##monthly_data_ws77_monthlystack[,,j] is the matrix for the month month_array[j],last and first 12 months 14 years
+colnames(monthly_data_ws78_monthlystack)=c(colnames(Y_78_monthly),"rain")
+for(i in 1:14){
+  for(j in 1:12){
+    dat_filtered=Y_78_monthly%>%filter(year_extracted==year_array[i])%>%filter(month_extracted==j)
+    dat_temp=dat_filtered%>%group_by(month_extracted)%>%colMeans(na.rm = TRUE)
+    #data.frame(dat_temp)%>%colMeans()
+    rain=as.numeric(dat_temp["Rainfall_m.x"])*dim(dat_filtered)[1]##Rain cannot ve averaged, so again sum
+ monthly_data_ws78_monthlystack[j,,i]= c(as.numeric(dat_temp),rain)
+ #print(i)
+# print(j)
+  }
+}
+#head(monthly_data_ws77_monthlystack)
+#monthly_data_ws80_monthlystack[,,5]##should print all months for 2009+5-1 data
+#Now we stack all the data monthly
+B_78=NULL
+for (i in 1:14){ 
+  A<-rbind(B_78,monthly_data_ws78_monthlystack[,,i])
+  B_78=A
+}
+# head(B_80)
+# dim(B)
+
+dim(B_78)
+#B_80[2:168 ,"Water.Table.Depth.BGS..cm."]
+
+B_78=cbind(B_78[1:167 ,"Depth_cm_b"],data.frame(B_78)%>%dplyr::select(-c(Depth_cm_b))%>%slice(2:168))
+
+```
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+dat=B_78
+#data.matrix(Y_80%>%drop_na)
+
+VARX=list()
+VARX$k=1 # indicates that the first two series are modeled
+VARX$m=11
+VARX$s=2 # sets 2 as the maximal lag order for exogenous series
+Model2_78=constructModel(data.matrix(dat%>%dplyr::select(-c(Elev_m_asl,Rainfall_m.x,month_extracted,year_extracted))%>%drop_na),p=4,struct='BasicEN',gran=c(5000,10),verbose=FALSE,VARX=VARX,T1=floor(nrow(dat)/3),T2=floor(2*nrow(dat)/3))
+
+
+results=cv.BigVAR(Model2_78)
+# results
+# plot(results)
+# #SparsityPlot.BigVAR.results(results)
+# predict(results,n.ahead=1, confint=TRUE)
+# coef(results)
+colnames(dat%>%dplyr::select(-c(Elev_m_asl,Rainfall_m.x,month_extracted,year_extracted)))
+COEF_78=COEF_78%>%bind_rows(coef(results))
+```
+```{r,fig.width=1.6,fig.height=1.6}
+Y=dat%>%drop_na()%>%dplyr::select("B_78[1:167, \"Depth_cm_b\"]")
+X=dat%>%drop_na()%>%dplyr::select(-c(Elev_m_asl,Rainfall_m.x,month_extracted,year_extracted))
+# T1=floor(nrow(Y)/3)
+# T2=floor(2*nrow(Y)/3)
+# #X <- matrix(0,nrow=nrow(Y),ncol=ncol(Y))
+# BICMSFE <- VARXForecastEval(Y,X,p=4,s=2,T1,T2,"BIC",1)##****This part gives the error.
+# BICMSFE
+# #y=Y[c((T2+2):133),]
+# #mon=dat_ws80_2006_2019%>%dplyr::select("month_extracted")
+# #mon=mon$month_extracted[((T1+1):T2)]
+# y=c(Y[c(T1+1):T2,1])
+# x=c(BICMSFE$pred)
+
+x=c(results@preds)
+y=tail(Y[,1],length(x))
+mon=dat_ws77_2006_2019%>%drop_na%>%dplyr::select("month_extracted")
+mon=tail(mon$month_extracted,length(x))
+
+preformance_test_depth_78=preformance_test_depth_78%>%bind_cols(data.frame(gof(y, x)))
+
+# plot(x,y,ylim=c(-300,100),xlim=c(-300,100),xlab="predicted",ylab="act",pch=19)
+# #title('water table depth y=x, in cm, monthly ws78_recent_time',cex.main=.5)
+# abline(0,1)
+# ggsave(file="water table depth y=x, in cm, monthly ws78_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+```{r}
+
+ggplot( data = data.frame(x,y),aes(x,y)) +
+  # stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq","adj.R2", "f", "p")),size = 1.6) +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+ 
+  #ggtitle("water table depth, in cm, monthly ws78")+
+  geom_point()+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="water table depth, in cm, monthly ws78_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+```{r}
+library(ggplot2)
+
+#create residual plot with title and axis labels
+ggplot(data = data.frame(x,y), aes(x = x, y = y-x)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE)+
+  #title='Residual analysis, water table depth, in cm, monthly ws78_recent_time',
+  labs( x='Fitted Values', y='Residuals')+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="Residual analysis, water table depth, in cm, monthly ws78_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+dat
+which(is.na(dat)==T)
+```
+
+###Now we shall see the seasonal data. 2 seasons (a) Growing - April1 -to Oct 30 (b) Dormant - November 1 - March 31. It will not be used but just in case we need.
+
+```{r}
+growing=c(4:10)
+dormant=c(1:3,11,12)
+```
+
+
+
+```{r}
+growing_dat_77=dat_ws77_2006_2019%>%filter(month_extracted%in%growing)%>%drop_na()
+dormant_dat_77=dat_ws77_2006_2019%>%filter(month_extracted%in%dormant)%>%drop_na()
+head(growing_dat_77)
+```
+
+```{r}
+growing_dat_78=dat_ws78_2006_2019%>%filter(month_extracted%in%growing)%>%drop_na()
+dormant_dat_78=dat_ws78_2006_2019%>%filter(month_extracted%in%dormant)%>%drop_na()
+head(growing_dat_78)
+```
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+growing_dat_80=dat_ws80_2006_2019%>%dplyr::select(c(Water.Table.Depth.BGS..cm.,Ave_air_T,Soil_Temp_,Rainfall_m,DailyFlow_,Ave_solar,net_rad,PET,RH,Windspeed_,Wind_direc,Ave_vapor_,month_extracted))%>%filter(month_extracted%in%growing)%>%filter(month_extracted%in%growing)%>%dplyr::select(-c(month_extracted))%>%drop_na()
+dormant_dat_80=dat_ws80_2006_2019%>%dplyr::select(c(Water.Table.Depth.BGS..cm.,Ave_air_T,Soil_Temp_,Rainfall_m,DailyFlow_,Ave_solar,net_rad,PET,RH,Windspeed_,Wind_direc,Ave_vapor_,month_extracted))%>%filter(month_extracted%in%dormant)%>%dplyr::select(-c(month_extracted))%>%drop_na()
+head(growing_dat_80)
+
+
+VARX=list()
+VARX$k=1 # indicates that the first two series are modeled
+VARX$m=11
+VARX$s=2 # sets 2 as the maximal lag order for exogenous series
+Model1_growing_80=constructModel(data.matrix(growing_dat_80%>%drop_na),p=4,struct='BasicEN',gran=c(500,10),verbose=FALSE,VARX=VARX,T1=floor(nrow(growing_dat_80)/3),T2=floor(2*nrow(growing_dat_80)/3))
+Model1_dormant_80=constructModel(data.matrix(dormant_dat_80%>%drop_na),p=4,struct='BasicEN',gran=c(500,10),verbose=FALSE,VARX=VARX,T1=floor(nrow(dormant_dat_80)/3),T2=floor(2*nrow(dormant_dat_80)/3))
+results_growing=cv.BigVAR(Model1_growing_80)
+results_dormant=cv.BigVAR(Model1_dormant_80)
+#results
+# plot(results_growing)
+# plot(results_dormant)
+# SparsityPlot.BigVAR.results(results_growing)
+# SparsityPlot.BigVAR.results(results_dormant)
+# 
+# predict(results_growing,n.ahead=1, confint=TRUE)
+# predict(results_dormant,n.ahead=1, confint=TRUE)
+# 
+# coef(results_growing)
+# coef(results_dormant)
+
+COEF_80=COEF_80%>%bind_rows(coef(results_growing))
+COEF_80=COEF_80%>%bind_rows(coef(results_dormant))
+
+```
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+Y1=growing_dat_80%>%drop_na%>%dplyr::select("Water.Table.Depth.BGS..cm.")%>%as.matrix()
+X1=growing_dat_80%>%drop_na()%>%dplyr::select(-c("Water.Table.Depth.BGS..cm."))%>%as.matrix()
+# T1=floor(nrow(Y1)/3)
+# T2=floor(2*nrow(Y1)/3)
+# #X <- matrix(0,nrow=nrow(Y),ncol=ncol(Y))
+# BICMSFE <- VARXForecastEval(Y1,X1,p=4,s=2,T1,T2,"BIC",1)##****This part gives the error.
+# 
+# BICMSFE
+# #y=tail(Y1,797)
+# #mon=dat_ws80_2006_2019%>%dplyr::select("month_extracted")
+# #mon=mon$month_extracted[((T1+1):T2)]
+# y=c(Y1[c(T1+1):T2,1])
+# x=c(BICMSFE$pred)
+
+x=c(results_growing@preds)
+y=tail(Y1[,1],length(x))
+mon=dat_ws77_2006_2019%>%drop_na%>%dplyr::select("month_extracted")
+mon=tail(mon$month_extracted,length(x))
+preformance_test_depth_80=preformance_test_depth_80%>%bind_cols(data.frame(gof(y, x)))
+
+# plot(x,y,ylim=c(-300,100),xlim=c(-300,100),xlab="predicted",ylab="act",pch=19)
+# #title('water table depth y=x, in cm, growing ws80_recent_time',cex.main=.5)
+# abline(0,1)
+# ggsave(file="water table depth y=x, in cm, growing ws80_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r,fig.width=1.6,fig.height=1.6}
+
+ggplot( data = data.frame(x,y),aes(x,y)) +
+  # stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq","adj.R2", "f", "p")),size = 1.6) +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+ 
+  #ggtitle("water table depth, in cm, growing ws80")+
+  geom_point()+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ggsave(file="water table depth, in cm, growing ws80_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+```{r}
+
+library(ggplot2)
+
+#create residual plot with title and axis labels
+ggplot(data = data.frame(x,y), aes(x = x, y = y-x)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE)+
+  labs( x='Fitted Values', y='Residuals')+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="Residual analysis, water table depth, in cm, growing ws80_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+Y2=dormant_dat_80%>%drop_na%>%dplyr::select("Water.Table.Depth.BGS..cm.")%>%as.matrix()
+X2=dormant_dat_80%>%drop_na()%>%dplyr::select(-c("Water.Table.Depth.BGS..cm."))%>%as.matrix()
+# T1=floor(nrow(Y2)/3)
+# T2=floor(2*nrow(Y2)/3)
+# #X <- matrix(0,nrow=nrow(Y),ncol=ncol(Y))
+# BICMSFE <- VARXForecastEval(Y2,X2,p=4,s=2,T1,T2,"BIC",1)##****This part gives the error.
+# 
+# BICMSFE
+# #y=tail(Y1,602)
+# #mon=dat_ws80_2006_2019%>%dplyr::select("month_extracted")
+# #mon=mon$month_extracted[((T1+1):T2)]
+# y=c(Y2[c(T1+1):T2,1])
+# x=c(BICMSFE$pred)
+
+x=c(results_dormant@preds)
+y=tail(Y2[,1],length(x))
+mon=dat_ws77_2006_2019%>%drop_na%>%dplyr::select("month_extracted")
+mon=tail(mon$month_extracted,length(x))
+preformance_test_depth_80=preformance_test_depth_80%>%bind_cols(data.frame(gof(y, x)))
+
+# plot(x,y,ylim=c(-300,100),xlim=c(-300,100),xlab="predicted",ylab="act",pch=19)
+# #title('water table depth y=x, in cm, dormant ws80',cex.main=.5)
+# abline(0,1)
+# ggsave(file="water table depth y=x, in cm, dormant ws80_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+
+ggplot( data = data.frame(x,y),aes(x,y)) +
+  # stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq","adj.R2", "f", "p")),size = 1.6) +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+ 
+  #ggtitle("water table depth, in cm, dormant ws80")+
+  geom_point()+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ggsave(file="water table depth, in cm, dormant ws80_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r}
+
+library(ggplot2)
+
+#create residual plot with title and axis labels
+ggplot(data = data.frame(x,y), aes(x = x, y = y-x)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE)+
+  #title='Residual analysis, water table depth, in cm, dormant ws80',
+  labs( x='Fitted Values', y='Residuals')+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="Residual analysis, water table depth, in cm, dormant ws80_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r,fig.width=1.6,fig.height=1.6}
+growing_dat_78=dat_ws78_2006_2019%>%dplyr::select(c(Depth_cm_b,Air_Temp_C,Soil_Temp,Rainfall_m.x,Daily_Flow_newdata,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa,month_extracted))%>%filter(month_extracted%in%growing)%>%dplyr::select(-c(month_extracted))
+dormant_dat_78=dat_ws78_2006_2019%>%dplyr::select(c(Depth_cm_b,Air_Temp_C,Soil_Temp,Rainfall_m.x,Daily_Flow_newdata,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa,month_extracted))%>%filter(month_extracted%in%dormant)%>%dplyr::select(-c(month_extracted))
+
+
+VARX=list()
+VARX$k=1 # indicates that the first two series are modeled
+VARX$m=11
+VARX$s=2 # sets 2 as the maximal lag order for exogenous series
+Model1_growing_78=constructModel(data.matrix(growing_dat_78%>%drop_na),p=4,struct='BasicEN',gran=c(500,10),verbose=FALSE,VARX=VARX,T1=floor(nrow(growing_dat_78)/3),T2=floor(2*nrow(growing_dat_78)/3))
+Model1_dormant_78=constructModel(data.matrix(dormant_dat_78%>%drop_na),p=4,struct='BasicEN',gran=c(500,10),verbose=FALSE,VARX=VARX,T1=floor(nrow(dormant_dat_78)/3),T2=floor(2*nrow(dormant_dat_78)/3))
+results_growing=cv.BigVAR(Model1_growing_78)
+results_dormant=cv.BigVAR(Model1_dormant_78)
+# results
+# plot(results_growing)
+# plot(results_dormant)
+# SparsityPlot.BigVAR.results(results_growing)
+# SparsityPlot.BigVAR.results(results_dormant)
+# 
+# predict(results_growing,n.ahead=1, confint=TRUE)
+# predict(results_dormant,n.ahead=1, confint=TRUE)
+# 
+# coef(results_growing)
+# coef(results_dormant)
+
+COEF_78=COEF_78%>%bind_rows(coef(results_growing))
+COEF_78=COEF_78%>%bind_rows(coef(results_dormant))
+
+
+```
+
+```{r,fig.width=1.6,fig.height=1.6}
+Y1=growing_dat_78%>%drop_na%>%dplyr::select("Depth_cm_b")%>%as.matrix()
+X1=growing_dat_78%>%drop_na()%>%dplyr::select(-c("Depth_cm_b"))%>%as.matrix()
+# T1=floor(nrow(Y1)/3)
+# T2=floor(2*nrow(Y1)/3)
+# #X <- matrix(0,nrow=nrow(Y),ncol=ncol(Y))
+# BICMSFE <- VARXForecastEval(Y1,X1,p=4,s=2,T1,T2,"BIC",1)##****This part gives the error.
+# 
+# BICMSFE
+# #y=tail(Y1,1198)
+# #mon=dat_ws80_2006_2019%>%dplyr::select("month_extracted")
+# #mon=mon$month_extracted[((T1+1):T2)]
+# y=c(Y1[c(T1+1):T2,1])
+# x=c(BICMSFE$pred)
+x=c(results_growing@preds)
+y=tail(Y1[,1],length(x))
+mon=dat_ws77_2006_2019%>%drop_na%>%dplyr::select("month_extracted")
+mon=tail(mon$month_extracted,length(x))
+preformance_test_depth_78=preformance_test_depth_78%>%bind_cols(data.frame(gof(y, x)))
+
+# plot(x,y,ylim=c(-300,100),xlim=c(-300,100),xlab="predicted",ylab="act",pch=19)
+# #title('water table depth y=x, in cm, growing ws78_recent_time',cex.main=.5)
+# abline(0,1)
+# ggsave(file="water table depth y=x, in cm, growing ws78_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+
+ggplot( data = data.frame(x,y),aes(x,y)) +
+  # stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq","adj.R2", "f", "p")),size = 1.5) +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+ 
+ # ggtitle("water table depth, in cm, growing ws78")+
+  geom_point()+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ggsave(file="water table depth, in cm, growing ws78_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r}
+
+library(ggplot2)
+
+#create residual plot with title and axis labels
+ggplot(data = data.frame(x,y), aes(x = x, y = y-x)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE)+
+  labs(x='Fitted Values', y='Residuals')+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="Residual analysis, water table depth, in cm, growing ws78_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r,fig.width=1.6,fig.height=1.6}
+Y2=dormant_dat_78%>%drop_na%>%dplyr::select("Depth_cm_b")%>%as.matrix()
+X2=dormant_dat_78%>%drop_na()%>%dplyr::select(-c("Depth_cm_b"))%>%as.matrix()
+# T1=floor(nrow(Y2)/3)
+# T2=floor(2*nrow(Y2)/3)
+# #X <- matrix(0,nrow=nrow(Y),ncol=ncol(Y))
+# BICMSFE <- VARXForecastEval(Y2,X2,p=4,s=2,T1,T2,"BIC",1)##****This part gives the error.
+# 
+# BICMSFE
+# #y=tail(Y2,517)
+# #mon=dat_ws80_2006_2019%>%dplyr::select("month_extracted")
+# #mon=mon$month_extracted[((T1+1):T2)]
+# y=c(Y2[c(T1+1):T2,1])
+# x=c(BICMSFE$pred)
+x=c(results_dormant@preds)
+y=tail(Y2[,1],length(x))
+mon=dat_ws77_2006_2019%>%drop_na%>%dplyr::select("month_extracted")
+mon=tail(mon$month_extracted,length(x))
+preformance_test_depth_78=preformance_test_depth_78%>%bind_cols(data.frame(gof(y, x)))
+
+# plot(x,y,ylim=c(-300,100),xlim=c(-300,100),xlab="predicted",ylab="act",pch=19)
+# #title('water table depth y=x, in cm, dormant ws78',cex.main=.5)
+# abline(0,1)
+# ggsave(file="water table depth y=x, in cm, dormant ws78_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r,fig.width=1.6,fig.height=1.6}
+
+ggplot( data = data.frame(x,y),aes(x,y)) +
+  # stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq","adj.R2", "f", "p")),size = 1.6) +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+  
+  #ggtitle("water table depth, in cm, dormant ws78")+
+  geom_point()+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ggsave(file="water table depth, in cm, dormant ws78.png_recent_time", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r}
+library(ggplot2)
+
+#create residual plot with title and axis labels
+ggplot(data = data.frame(x,y), aes(x = x, y = y-x)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE)+
+  labs( x='Fitted Values', y='Residuals')+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="Residual analysis, water table depth, in cm, dormant ws78_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r,fig.width=1.6,fig.height=1.6}
+growing_dat_77=dat_ws77_2006_2019%>%dplyr::select(c(Depth_cm_b,Air_Temp_C,Soil_Temp_,Rainfall,DailyFlow,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa,month_extracted))%>%filter(month_extracted%in%growing)%>%dplyr::select(-c(month_extracted))%>%drop_na()
+dormant_dat_77=dat_ws77_2006_2019%>%dplyr::select(c(Depth_cm_b,Air_Temp_C,Soil_Temp_,Rainfall,Avg_FlowRa,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa,month_extracted))%>%filter(month_extracted%in%dormant)%>%dplyr::select(-c(month_extracted))%>%drop_na()
+
+
+
+VARX=list()
+VARX$k=1 # indicates that the first two series are modeled
+VARX$m=11
+VARX$s=2 # sets 2 as the maximal lag order for exogenous series
+Model1_growing_77=constructModel(data.matrix(growing_dat_77%>%drop_na),p=4,struct='BasicEN',gran=c(500,10),verbose=FALSE,VARX=VARX,T1=floor(nrow(growing_dat_77)/3),T2=floor(2*nrow(growing_dat_77)/3))
+Model1_dormant_77=constructModel(data.matrix(dormant_dat_77%>%drop_na),p=4,struct='BasicEN',gran=c(500,10),verbose=FALSE,VARX=VARX,T1=floor(nrow(dormant_dat_77)/3),T2=floor(2*nrow(dormant_dat_77)/3))
+results_growing=cv.BigVAR(Model1_growing_77)
+results_dormant=cv.BigVAR(Model1_dormant_77)
+# results
+# plot(results_growing)
+# plot(results_dormant)
+# SparsityPlot.BigVAR.results(results_growing)
+# SparsityPlot.BigVAR.results(results_dormant)
+# 
+# predict(results_growing,n.ahead=1, confint=TRUE)
+# predict(results_dormant,n.ahead=1, confint=TRUE)
+# 
+# coef(results_growing)
+# coef(results_dormant)
+
+COEF_77=COEF_77%>%bind_rows(coef(results_growing))
+COEF_77=COEF_77%>%bind_rows(coef(results_dormant))
+```
+
+```{r,fig.width=1.6,fig.height=1.6}
+Y1=growing_dat_77%>%drop_na%>%dplyr::select("Depth_cm_b")%>%as.matrix()
+X1=growing_dat_77%>%drop_na()%>%dplyr::select(-c("Depth_cm_b"))%>%as.matrix()
+# T1=floor(nrow(Y1)/3)
+# T2=floor(2*nrow(Y1)/3)
+# #X <- matrix(0,nrow=nrow(Y),ncol=ncol(Y))
+# BICMSFE <- VARXForecastEval(Y1,X1,p=4,2,T1,T2,"BIC",1)##****This part gives the error.
+# 
+# BICMSFE
+# #y=tail(Y1,1364)
+# #mon=dat_ws80_2006_2019%>%dplyr::select("month_extracted")
+# #mon=mon$month_extracted[((T1+1):T2)]
+# y=c(Y1[c(T1+1):T2,1])
+# x=c(BICMSFE$pred)
+x=c(results_growing@preds)
+y=tail(Y1[,1],length(x))
+mon=dat_ws77_2006_2019%>%drop_na%>%dplyr::select("month_extracted")
+mon=tail(mon$month_extracted,length(x))
+preformance_test_depth_77=preformance_test_depth_77%>%bind_cols(data.frame(gof(y, x)))
+
+# plot(x,y,ylim=c(-300,100),xlim=c(-300,100),xlab="predicted",ylab="act",pch=19)
+# #title('water table depth y=x, in cm, growing ws77',cex.main=.5)
+# abline(0,1)
+# ggsave(file="water table depth y=x, in cm, growing ws77_recent_time.png", device = "png",path="pictures_new_well_depth")
+```
+
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+
+ggplot( data = data.frame(x,y),aes(x,y)) +
+  # stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq","adj.R2", "f", "p")),size = 1.6) +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+  
+  #ggtitle("water table depth, in cm, growing ws77")+
+  geom_point()+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ggsave(file="water table depth, in cm, growing ws77_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+
+```
+
+```{r}
+library(ggplot2)
+
+#create residual plot with title and axis labels
+ggplot(data = data.frame(x,y), aes(x =x, y = y-x)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE)+
+  labs( x='Fitted Values', y='Residuals')+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="Residual analysis, water table depth, in cm, growing ws77_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r,fig.width=1.6,fig.height=1.6}
+Y2=dormant_dat_77%>%drop_na%>%dplyr::select("Depth_cm_b")%>%as.matrix()
+X2=dormant_dat_77%>%drop_na()%>%dplyr::select(-c("Depth_cm_b"))%>%as.matrix()
+# T1=floor(nrow(Y2)/3)
+# T2=floor(2*nrow(Y2)/3)
+# #X <- matrix(0,nrow=nrow(Y),ncol=ncol(Y))
+# BICMSFE <- VARXForecastEval(Y2,X2,p=4,s=2,T1,T2,"BIC",1)##****This part gives the error.
+# 
+# BICMSFE
+# #y=tail(Y2,562)
+# #mon=dat_ws80_2006_2019%>%dplyr::select("month_extracted")
+# #mon=mon$month_extracted[((T1+1):T2)]
+# y=c(Y2[c(T1+1):T2,1])
+# x=c(BICMSFE$pred)
+x=c(results_dormant@preds)
+y=tail(Y2[,1],length(x))
+mon=dat_ws77_2006_2019%>%drop_na%>%dplyr::select("month_extracted")
+mon=tail(mon$month_extracted,length(x))
+preformance_test_depth_77=preformance_test_depth_77%>%bind_cols(data.frame(gof(y, x)))
+
+# plot(x,y,ylim=c(-300,100),xlim=c(-300,100),xlab="predicted",ylab="act",pch=19)
+# #title('water table depth y=x, in cm, dormant ws77',cex.main=.5)
+# abline(0,1)
+# ggsave(file="water table depth y=x, in cm, dormant ws77_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+
+```{r,fig.width=1.6,fig.height=1.6}
+#par(cex.main=0.2)
+ggplot( data = data.frame(x,y),aes(x,y)) +
+  # stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq","adj.R2", "f", "p")),size = 1.6) +
+  xlab("predicted")+
+  ylab("act")+
+  xlim(-300,100)+
+  ylim(-300,100)+
+ # ggtitle("water table depth, in cm, dormant ws77")+
+  geom_point()+
+  theme(plot.title = element_text(size = 8, face = "bold"))
+ggsave(file="water table depth, in cm, dormant ws77_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r}
+library(ggplot2)
+
+#create residual plot with title and axis labels
+ggplot(data = data.frame(x,y), aes(x = x, y = y-x)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE)+
+ labs( x='Fitted Values', y='Residuals')+
+  theme(plot.title = element_text(size = 14, face = "bold"))
+ggsave(file="Residual analysis, water table depth, in cm, dormant ws77_recent_time.png", device = "png",path="pictures_new_well_depth_recent_time")
+```
+
+```{r}
+row.names(COEF_77)=c("ws77_daily","ws77_monthly","ws77_growing","ws77_dormant")
+row.names(COEF_78)=c("ws78_daily","ws78_monthly","ws78_growing","ws78_dormant")
+row.names(COEF_80)=c("ws80_daily","ws80_monthly","ws80_growing","ws80_dormant")
+```
+
+```{r}
+COEF=cbind(t(COEF_77),t(COEF_78),t(COEF_80))
+row.names(COEF)=c("intercept","Y1L1","Y1L2","Y1L3","Y1L4","Air_Temp_C1","Soil_Temp_1","Rainfall1","DailyFlow1","Solar_rad_1","net_rad1","PET1","RH1","Windspeed_1","Wind_direc1","Vapor_Kpa1","Air_Temp_C2","Soil_Temp_2","Rainfall2","DailyFlow2","Solar_rad_2","net_rad2","PET2","RH2","Windspeed_2","Wind_direc2","Vapor_Kpa2")
+COEF
+```
+
+
+```{r}
+colnames(preformance_test_depth_77)=c("ws77_daily","ws77_monthly","ws77_growing","ws77_dormant")
+colnames(preformance_test_depth_78)=c("ws78_daily","ws78_monthly","ws78_growing","ws78_dormant")
+colnames(preformance_test_depth_80)=c("ws80_daily","ws80_monthly","ws80_growing","ws80_dormant")
+```
+
+```{r}
+PERFORMANCE_test_depth=cbind(preformance_test_depth_77,preformance_test_depth_78,preformance_test_depth_80)
+PERFORMANCE_test_depth
+```
+```{r}
+as.matrix(PERFORMANCE_test_depth)
+```
+
+```{r}
+#install.packages("corrplot")
+# library(corrplot)
+# COEF1=COEF*10000
+# COEF2=(COEF1-min(COEF1))/(max(COEF1)-min(COEF1))*100
+#corrplot(COEF2, method = 'number') # colorful number
+```
+
+
+```{r}
+# df=COEF
+# brks <- quantile(df, probs = seq(.05, .95, .05), na.rm = TRUE)
+# clrs <- round(seq(255, 40, length.out = length(brks) + 1), 0) %>%
+#   {paste0("rgb(255,", ., ",", ., ")")}
+# datatable(df) %>% formatStyle(names(df), backgroundColor = styleInterval(brks, clrs))
+```
+
+
+
+
+
+
+```{r}
+# #install.packages('pheatmap') # if not installed already
+# library(pheatmap)
+# pheatmap(COEF*10000, display_numbers = T,legend_breaks = seq(min(COEF*10000),max(COEF*10000),10))
+```
+
+
+```{r}
+Y_77|>pull(Depth_cm_b)|>hist(breaks=200,prob=T)
+```
+
+```{r}
+Y_78|>pull(Depth_cm_b)|>hist(breaks=200,prob=T)
+
+```
+```{r}
+Y_80|>pull(Water.Table.Depth.BGS..cm.)|>hist(breaks=200,prob=T)
+
+```
+
+
+```{r}
+length(Y_77|>pull(Depth_cm_b))
+length(Y_78|>pull(Depth_cm_b))
+length(Y_80|>pull(Water.Table.Depth.BGS..cm.))
+```
+
+```{r}
+NC_data_1988_2008=read_excel("/Users/alokesh.manna17gmail.com/NSF_internship_2023/raw_data/NC_data/NC_1988_2008.xlsx")
+```
+
+```{r}
+data.frame(water_table_depth=Y_77|>pull(Depth_cm_b))|>
+  mutate(watershed="WS_77")|>
+  
+bind_rows(data.frame(water_table_depth=Y_78|>pull(Depth_cm_b))|>
+  mutate(watershed="WS_78"))|>  
+bind_rows( data.frame(water_table_depth=Y_80|>pull(Water.Table.Depth.BGS..cm.))|>
+  mutate(watershed="WS_80"))|>
+bind_rows( data.frame(water_table_depth=NC_data_1988_2008|>pull(Depth_cm_b))|>
+             mutate(water_table_depth=water_table_depth*(-100))|>
+  mutate(watershed="NC"))|>
+  ggplot(aes(x = water_table_depth)) + 
+  geom_histogram(fill = "blue", color = "black") + 
+  facet_wrap(~watershed) +
+  theme_minimal() +
+  labs(title = "Histogram of daily water table depth accross 3  different location in SC and 1 in NC",
+       x = "CM",
+       y = "Frequency")
+```
+
+
+```{r}
+growing_dat_77=dat_ws77_2006_2019%>%dplyr::select(c(Depth_cm_b,Air_Temp_C,Soil_Temp_,Rainfall,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa,month_extracted))%>%filter(month_extracted%in%growing)%>%dplyr::select(-c(month_extracted))%>%drop_na()
+dormant_dat_77=dat_ws77_2006_2019%>%dplyr::select(c(Depth_cm_b,Air_Temp_C,Soil_Temp_,Rainfall,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa,month_extracted))%>%filter(month_extracted%in%dormant)%>%dplyr::select(-c(month_extracted))%>%drop_na()
+
+growing_dat_78=dat_ws78_2006_2019%>%dplyr::select(c(Depth_cm_b,Air_Temp_C,Soil_Temp,Rainfall_m.x,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa,month_extracted))%>%filter(month_extracted%in%growing)%>%dplyr::select(-c(month_extracted))
+dormant_dat_78=dat_ws78_2006_2019%>%dplyr::select(c(Depth_cm_b,Air_Temp_C,Soil_Temp,Rainfall_m.x,Solar_rad_,net_rad,PET,RH,Windspeed_,Wind_direc,Vapor_Kpa,month_extracted))%>%filter(month_extracted%in%dormant)%>%dplyr::select(-c(month_extracted))
+
+growing_dat_80=dat_ws80_2006_2019%>%dplyr::select(c(Water.Table.Depth.BGS..cm.,Ave_air_T,Soil_Temp_,Rainfall_m,Ave_solar,net_rad,PET,RH,Windspeed_,Wind_direc,Ave_vapor_,month_extracted))%>%filter(month_extracted%in%growing)%>%filter(month_extracted%in%growing)%>%dplyr::select(-c(month_extracted))%>%drop_na()
+dormant_dat_80=dat_ws80_2006_2019%>%dplyr::select(c(Water.Table.Depth.BGS..cm.,Ave_air_T,Soil_Temp_,Rainfall_m,Ave_solar,net_rad,PET,RH,Windspeed_,Wind_direc,Ave_vapor_,month_extracted))%>%filter(month_extracted%in%dormant)%>%dplyr::select(-c(month_extracted))%>%drop_na()
+
+```
+
+
+
+```{r}
+dat_growing_dormant=data.frame(
+  water_table_depth=growing_dat_77|>
+    pull(Depth_cm_b)
+  
+)|>mutate(season="growing",
+  watershed="WS_77")|>
+  
+  bind_rows(
+    data.frame(
+  water_table_depth=dormant_dat_77|>
+    pull(Depth_cm_b)
+  
+)|>mutate(season="dormant",
+  watershed="WS_77")
+  )|>
+
+bind_rows(
+ data.frame(
+  water_table_depth=growing_dat_78|>
+    pull(Depth_cm_b)
+  
+)|>mutate(season="growing",
+  watershed="WS_78")|>
+  
+  bind_rows(
+    data.frame(
+  water_table_depth=dormant_dat_78|>
+    pull(Depth_cm_b)
+  
+)|>mutate(season="dormant",
+  watershed="WS_78")
+  )
+ 
+  
+)|>
+  
+bind_rows(data.frame(
+  water_table_depth=growing_dat_80|>
+    pull(Water.Table.Depth.BGS..cm.)
+  
+)|>mutate(season="growing",
+  watershed="WS_80")|>
+  
+  bind_rows(
+    data.frame(
+  water_table_depth=dormant_dat_80|>
+    pull(Water.Table.Depth.BGS..cm.)
+  
+)|>mutate(season="dormant",
+  watershed="WS_80")
+  ))
+  
+  
+```
+
+
+
+
+```{r}
+dat_growing_dormant|>
+  ggplot(aes(x = water_table_depth)) + 
+  geom_histogram(fill = "blue", color = "black") + 
+  facet_grid(season~watershed) +
+  theme_minimal() +
+  labs(title = "Histogram of seasonal variation of water table depth accross 3  different location in SC",
+       x = "CM",
+       y = "Frequency")
+```
+
+##All the 11 variables in beta are written sequence wise and coloured by their importance. starts ##with air temp and end with vapour kpa. 
+
+
+
+```{r}
+dat77=read.csv("raw_data/dat77_prediction")
+dat78=read.csv("raw_data/dat78_prediction")
+dat80=read.csv("raw_data/dat80_prediction")
+datNC=read.csv("raw_data/datNC_prediction")
+```
+
+
+
+```{r}
+bigdat= dat77|>
+  dplyr::select("actual","predicted")|>
+  mutate(location="WS_77")|>
+  bind_rows(dat78|>
+  dplyr::select("actual","predicted")|>
+  mutate(location="WS_78"))|>
+  bind_rows(dat80|>
+  dplyr::select("actual","predicted")|>
+  mutate(location="WS_80"))|>
+  bind_rows(datNC|>
+  dplyr::select("actual","predicted")|>
+  mutate(location="WS_NC"))
+```
+
+
+```{r}
+library("ggpmisc")
+ggplot(bigdat, aes(x = actual, y = predicted)) +
+  geom_point(color = "blue") +  # Scatter plot of actual vs predicted
+  geom_smooth(method = "lm", se = TRUE, color = "red") +  # Add linear regression line
+  stat_poly_eq(formula = y ~ x, 
+               aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+               parse = TRUE) +  # Add regression equation and R^2
+  labs(title = "Actual vs. Predicted Values in ws 77, 78, 80 in SC and a ws in NC",
+       x = "Actual Values",
+       y = "Predicted Values") +
+  facet_wrap(~ location) +
+  theme_minimal() 
+```
+
